@@ -5,6 +5,8 @@ import(
 	"net/http"
 	"sync/atomic"
 	"fmt"
+	"encoding/json"
+	"strings"
 )
 
 
@@ -17,9 +19,84 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 		cfg.fileserverHits.Add(1)
 		next.ServeHTTP(w,r)
 	})
+}
+
+func respondWithError(w http.ResponseWriter, code int, msg string){
+	type ret struct {
+		Error string `json:"error"`
+	}
+	retErr := ret{
+		Error: msg,
+	}
 	
+	data, err := json.Marshal(retErr)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write(data)
+
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}){
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write(data)
+}
+
+func chirpHandler(w http.ResponseWriter, r *http.Request) {
+	type chirps struct {
+		Body string `json:"body"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	chirp := chirps{}
+	err := decoder.Decode(&chirp)
+	if err != nil {
+		respondWithError(w, 500, "Error Decoding Chirp")
+		return
+	}
+
+	if len(chirp.Body) > 140 {
+		respondWithError(w, 400, "Chirp is too long")
+		return
+	}
+
+	cwords := strings.Split(chirp.Body, " ")
+
+	bannedWords := map[string]bool{
+		"kerfuffle": true,
+		"sharbert": true,
+		"fornax":true,
+	}
+
+	for i := 0; i < len(cwords); i++ {
+		if _, ok := bannedWords[strings.ToLower(cwords[i])]; ok {
+			cwords[i] = "****"
+		}
+	}
 	
-	
+	cstr := strings.Join(cwords, " ")
+
+	type ret struct {
+		CleanedBody string `json:"cleaned_body"`
+	}
+
+	retStr := ret {
+		CleanedBody: cstr,
+	}
+
+
+	respondWithJSON(w, 200, retStr)
 }
 
 func (cfg *apiConfig) writeHits(rw http.ResponseWriter, _*http.Request) {
@@ -53,6 +130,7 @@ func main() {
 	httpmux.HandleFunc("GET /api/healthz", h1)
 	httpmux.HandleFunc("GET /admin/metrics", cfg.writeHits)
 	httpmux.HandleFunc("POST /admin/reset", cfg.resetHits)
+	httpmux.HandleFunc("POST /api/validate_chirp", chirpHandler)
 	svr := &http.Server{
 		Addr: ":8080",
 		Handler: httpmux,
