@@ -341,6 +341,76 @@ func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, r *http.Request){
 	respondWithError(w, 204, "success")
 }
 
+func (cfg *apiConfig) updateHandler(w http.ResponseWriter, r *http.Request){
+	tok, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, 401, err.Error())
+		return
+	}
+	uuid, err := auth.ValidateJWT(tok, cfg.apisecret)
+	if err != nil {
+		respondWithError(w, 401, err.Error())
+		return
+	}
+	decoder := json.NewDecoder(r.Body)
+	e := Email{}
+	decoder.Decode(&e)
+	hashedP, err := auth.HashPassword(e.Password)
+	if err != nil {
+		respondWithError(w, 401, err.Error())
+		return
+	}
+	row, err := cfg.DB.UpdateUser(r.Context(), database.UpdateUserParams{ID:uuid, Email: e.Email, HashedPassword: hashedP})
+	if err != nil {
+		respondWithError(w, 401, err.Error())
+		return
+	}
+	respondWithJSON(w, 200, dbUserToStruct(row))
+	return 
+}
+
+func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, r *http.Request){
+
+	tok, err := auth.GetBearerToken(r.Header)
+
+	if err != nil {
+		respondWithError(w, 401, err.Error())
+		return
+	}
+	uid, err := auth.ValidateJWT(tok, cfg.apisecret)
+	if err != nil {
+		respondWithError(w, 401, err.Error())
+		return
+	}
+
+	chirpID, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		respondWithError(w, 404, err.Error())
+		return
+	}
+	
+	dbChirp, err := cfg.DB.GetOneChirp(r.Context(), chirpID)
+	if err !=  nil {
+		respondWithError(w, 404, err.Error())
+		return
+	}
+
+	if dbChirp.UserID != uid {
+		respondWithError(w,403, "uuids don't match")
+		return
+	}
+
+	err = cfg.DB.DeleteChirp(r.Context(), chirpID)
+	if err !=  nil {
+		respondWithError(w, 500, err.Error())
+		return
+	}
+	
+	respondWithError(w, 204, "Delete successful")
+
+
+}
+
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -379,6 +449,8 @@ func main() {
 	httpmux.HandleFunc("POST /api/login", cfg.loginHandler)
 	httpmux.HandleFunc("POST /api/refresh", cfg.refreshHandler)
 	httpmux.HandleFunc("POST /api/revoke", cfg.revokeHandler)
+	httpmux.HandleFunc("PUT /api/users", cfg.updateHandler)
+	httpmux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.deleteChirpHandler)
 
 	svr := &http.Server{
 		Addr: ":8080",
