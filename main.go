@@ -24,6 +24,7 @@ type apiConfig struct {
 	DB *database.Queries
 	platform string
 	apisecret string
+	polkakey string
 }
 
 type User struct {
@@ -33,6 +34,7 @@ type User struct {
 	Email     string    `json:"email"`
 	Token	  string	`json:"token"`
 	RefreshToken string `json:"refresh_token"`
+	IsChirpyRed bool	`json:"is_chirpy_red"`
 }
 
 type Chirp struct {
@@ -65,6 +67,7 @@ func dbUserToStruct(d database.User) User{
 		CreatedAt: d.CreatedAt,
 		UpdatedAt: d.UpdatedAt,
 		Email: d.Email,
+		IsChirpyRed: d.IsChirpyRed,
 	}
 }
 
@@ -407,8 +410,45 @@ func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, r *http.Request)
 	}
 	
 	respondWithError(w, 204, "Delete successful")
+}
 
+func (cfg *apiConfig) chirpyRedWebhook(w http.ResponseWriter, r *http.Request) {
+	type UID struct {
+		UserID uuid.UUID `json:"user_id"`
+	}
+	type WebhookEvent struct {
+		Event string `json:"event"`
+		Data UID `json:"data"`
+	}
+	whAPIKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		respondWithError(w, 401, err.Error())
+		return
+	}
 
+	if cfg.polkakey != whAPIKey {
+		respondWithError(w, 401, "Unknown user")
+		return
+	}
+	wh := WebhookEvent{}
+	decoder := json.NewDecoder(r.Body)
+	err = decoder.Decode(&wh)
+	if err != nil {
+		respondWithError(w, 500, err.Error())
+		return
+	}
+
+	if wh.Event != "user.upgraded" {
+		respondWithError(w, 204, "Wrong event")
+		return
+	}
+
+	err = cfg.DB.UpdateChirpyRed(r.Context(), wh.Data.UserID)
+	if err != nil {
+		respondWithError(w,404, err.Error())
+	} else {
+		respondWithError(w,204,"")
+	}
 }
 
 func main() {
@@ -429,7 +469,7 @@ func main() {
 	cfg.DB = dbQueries
 	cfg.platform = os.Getenv("PLATFORM")
 	cfg.apisecret = os.Getenv("API_SECRET")
-
+	cfg.polkakey = os.Getenv("POLKA_KEY")
 	h1 := func(rw http.ResponseWriter, _ *http.Request) {
 		rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		rw.WriteHeader(200)
@@ -451,7 +491,7 @@ func main() {
 	httpmux.HandleFunc("POST /api/revoke", cfg.revokeHandler)
 	httpmux.HandleFunc("PUT /api/users", cfg.updateHandler)
 	httpmux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.deleteChirpHandler)
-
+	httpmux.HandleFunc("POST /api/polka/webhooks", cfg.chirpyRedWebhook)
 	svr := &http.Server{
 		Addr: ":8080",
 		Handler: httpmux,
